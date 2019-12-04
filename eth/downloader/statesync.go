@@ -33,6 +33,8 @@ import (
 
 // stateReq represents a batch of state fetch requests grouped together into
 // a single data retrieval network packet.
+// stateReq表示一组组合在一起的状态获取请求
+// 单个数据检索网络数据包。
 type stateReq struct {
 	items    []common.Hash              // Hashes of the state items to download
 	tasks    map[common.Hash]*stateTask // Download tasks to track previous attempts
@@ -71,9 +73,12 @@ func (d *Downloader) syncState(root common.Hash) *stateSync {
 
 // stateFetcher manages the active state sync and accepts requests
 // on its behalf.
+// stateFetcher管理活动状态同步并接受请求
+// 代表它。
 func (d *Downloader) stateFetcher() {
 	for {
 		select {
+		// 这里是接收从syncState发来的stateSync对象
 		case s := <-d.stateSyncStart:
 			for next := s; next != nil; {
 				next = d.runStateSync(next)
@@ -88,6 +93,8 @@ func (d *Downloader) stateFetcher() {
 
 // runStateSync runs a state synchronisation until it completes or another root
 // hash is requested to be switched over to.
+//runStateSync运行状态同步，直到它完成或另一个根
+//请求切换到哈希
 func (d *Downloader) runStateSync(s *stateSync) *stateSync {
 	var (
 		active   = make(map[string]*stateReq) // Currently in-flight requests
@@ -117,6 +124,8 @@ func (d *Downloader) runStateSync(s *stateSync) *stateSync {
 			deliverReq   *stateReq
 			deliverReqCh chan *stateReq
 		)
+		// 这里就是一直循环来判断，是不是已经有完成的请求，如果有就把数组第一个值取出来
+		// 这里就类似实现了一个优先级队列，先完成的请求先被处理
 		if len(finished) > 0 {
 			deliverReq = finished[0]
 			deliverReqCh = s.deliver
@@ -131,25 +140,31 @@ func (d *Downloader) runStateSync(s *stateSync) *stateSync {
 			return nil
 
 		// Send the next finished request to the current sync:
+		// 把待处理的数据发过去
 		case deliverReqCh <- deliverReq:
 			// Shift out the first request, but also set the emptied slot to nil for GC
+			// 这里把前面取出去做处理的数据，从完成队列里面删掉
 			copy(finished, finished[1:])
 			finished[len(finished)-1] = nil
 			finished = finished[:len(finished)-1]
 
 		// Handle incoming state packs:
+		// 这里是处理节点发来的数据包
 		case pack := <-d.stateCh:
 			// Discard any data not requested (or previously timed out)
+			// 丢弃未请求的任何数据（或之前已超时）
 			req := active[pack.PeerId()]
 			if req == nil {
 				log.Debug("Unrequested node data", "peer", pack.PeerId(), "len", pack.Items())
 				continue
 			}
 			// Finalize the request and queue up for processing
+			// 完成请求之后，把接收到的数据放到完成的队列里面，然后等着排队处理
 			req.timer.Stop()
 			req.response = pack.(*statePack).states
 
 			finished = append(finished, req)
+			// 把这个完成的请求，从正在请求中的map里面删掉
 			delete(active, pack.PeerId())
 
 			// Handle dropped peer connections:
@@ -179,6 +194,7 @@ func (d *Downloader) runStateSync(s *stateSync) *stateSync {
 			delete(active, req.peer.id)
 
 		// Track outgoing state requests:
+		// 向节点发送获取数据的请求之后，会通知到这里来
 		case req := <-d.trackStateReq:
 			// If an active request already exists for this peer, we have a problem. In
 			// theory the trie node schedule must never assign two requests to the same
@@ -186,6 +202,12 @@ func (d *Downloader) runStateSync(s *stateSync) *stateSync {
 			// immediately reconnect before the previous times out. In this case the first
 			// request is never honored, alas we must not silently overwrite it, as that
 			// causes valid requests to go missing and sync to get stuck.
+			// 如果此对等方已存在活动请求，则表示存在问题。 在
+			//理论trie节点调度必须永远不要为这两个请求分配两个请求
+			//同行 然而，在实践中，对等体可能会收到请求，断开连接和
+			//在之前的时间之前立即重新连接。 在这种情况下第一个
+			//请求永远不会被尊重，唉，我们不能无声地覆盖它，就像那样
+			//导致有效请求丢失并同步以卡住
 			if old := active[req.peer.id]; old != nil {
 				log.Warn("Busy peer assigned new state fetch", "peer", old.peer.id)
 
@@ -230,6 +252,8 @@ type stateSync struct {
 
 // stateTask represents a single trie node download task, containing a set of
 // peers already attempted retrieval from to detect stalled syncs and abort.
+// stateTask表示单个节点下载任务，包含一组
+// 对等体已经尝试检索以检测停滞的同步并中止
 type stateTask struct {
 	attempts map[string]struct{}
 }
@@ -274,6 +298,12 @@ func (s *stateSync) Cancel() error {
 // receive data from peers, rather those are buffered up in the downloader and
 // pushed here async. The reason is to decouple processing from data receipt
 // and timeouts.
+//loop是状态trie sync的主要事件循环。 它负责
+//将新任务分配给对等方（包括将其发送给它们）以及
+//用于处理入站数据。 注意，循环不直接
+//从同行接收数据，而不是在下载器中缓存的数据
+//推送到这里异步。 原因是将处理与数据接收分离
+//和超时
 func (s *stateSync) loop() (err error) {
 	// Listen for new peer events to assign tasks to them
 	newPeer := make(chan *peerConnection, 1024)
@@ -287,10 +317,14 @@ func (s *stateSync) loop() (err error) {
 	}()
 
 	// Keep assigning new tasks until the sync completes or aborts
+	// 这里就是只要还有待请求的任务就继续执行，直到请求完所有valueNode
+	// 因为请求到最后的valueNode时，以及没有请求任务了，但是value只存储在内存中还没有存入磁盘，所以在defer里面会最后再提交一次
 	for s.sched.Pending() > 0 {
+		// 这里才是真正的提交，通过过来的State数据，会写入到db中
 		if err = s.commit(false); err != nil {
 			return err
 		}
+		// 这里就是分配任务
 		s.assignTasks()
 		// Tasks assigned, wait for something to happen
 		select {
@@ -304,8 +338,10 @@ func (s *stateSync) loop() (err error) {
 			return errCancelStateFetch
 
 		case req := <-s.deliver:
+			// 接收请求完成的数据，从runStateSync发送过来的
 			// Response, disconnect or timeout triggered, drop the peer if stalling
 			log.Trace("Received node data response", "peer", req.peer.id, "count", len(req.response), "dropped", req.dropped, "timeout", !req.dropped && req.timedOut())
+			// 这里是最低要两项item
 			if len(req.items) <= 2 && !req.dropped && req.timedOut() {
 				// 2 items are the minimum requested, if even that times out, we've no use of
 				// this peer at the moment.
@@ -313,10 +349,12 @@ func (s *stateSync) loop() (err error) {
 				s.d.dropPeer(req.peer.id)
 			}
 			// Process all the received blobs and check for stale delivery
+			// 处理所有收到的blob并检查陈旧的交付
 			if err = s.process(req); err != nil {
 				log.Warn("Node data write error", "err", err)
 				return err
 			}
+			// 这里..
 			req.peer.SetNodeDataIdle(len(req.response))
 		}
 	}
@@ -343,16 +381,26 @@ func (s *stateSync) commit(force bool) error {
 
 // assignTasks attempts to assign new tasks to all idle peers, either from the
 // batch currently being retried, or fetching new data from the trie sync itself.
+// assignTasks尝试将新任务分配给所有空闲对等体，或者从
+// 当前正在重试批处理，或从trie同步本身获取新数据
 func (s *stateSync) assignTasks() {
 	// Iterate over all idle peers and try to assign them state fetches
+	// 迭代所有空闲对等体并尝试为它们分配状态提取
+	// 所有没有正在同步state数据的节点
 	peers, _ := s.d.peers.NodeDataIdlePeers()
+	// 这里就是向多个节点去请求数据
+	// 而且是把所有等待请求的数据按照每个节点的情况去分配给每个节点不同量的任务
+	// 所有数据是同时向多个节点去获取的
 	for _, p := range peers {
 		// Assign a batch of fetches proportional to the estimated latency/bandwidth
+		// 分配与估计的延迟/带宽成比例的一批提取
 		cap := p.NodeDataCapacity(s.d.requestRTT())
 		req := &stateReq{peer: p, timeout: s.d.requestTTL()}
+		// 这里就是构建要请求的任务，把要获取的数据hash构建好到req对象里面
 		s.fillTasks(cap, req)
 
 		// If the peer was assigned tasks to fetch, send the network request
+		// 如果为对等体分配了要获取的任务，则发送网络请求
 		if len(req.items) > 0 {
 			req.peer.log.Trace("Requesting new batch of data", "type", "state", "count", len(req.items))
 			select {
@@ -369,6 +417,8 @@ func (s *stateSync) assignTasks() {
 // tasks to send to the remote peer.
 func (s *stateSync) fillTasks(n int, req *stateReq) {
 	// Refill available tasks from the scheduler.
+	// 从调度程序重新填充可用任务。
+	// 任务没到上线就填充满
 	if len(s.tasks) < n {
 		new := s.sched.Missing(n - len(s.tasks))
 		for _, hash := range new {
@@ -376,18 +426,22 @@ func (s *stateSync) fillTasks(n int, req *stateReq) {
 		}
 	}
 	// Find tasks that haven't been tried with the request's peer.
+	// 查找未使用请求的对等方尝试过的任务。
 	req.items = make([]common.Hash, 0, n)
 	req.tasks = make(map[common.Hash]*stateTask, n)
 	for hash, t := range s.tasks {
 		// Stop when we've gathered enough requests
+		// 当我们收集到足够的请求时停止
 		if len(req.items) == n {
 			break
 		}
 		// Skip any requests we've already tried from this peer
+		// 如果这个任务已经分配过这个节点了就跳过
 		if _, ok := t.attempts[req.peer.id]; ok {
 			continue
 		}
 		// Assign the request to this peer
+		// 将请求分配给此对等方
 		t.attempts[req.peer.id] = struct{}{}
 		req.items = append(req.items, hash)
 		req.tasks[hash] = t
@@ -409,6 +463,7 @@ func (s *stateSync) process(req *stateReq) error {
 	}(time.Now())
 
 	// Iterate over all the delivered data and inject one-by-one into the trie
+	// 开始循环把所有接收到的数据存储trie中，实际上是先存储到缓存中，然后loop()函数会检测是否有需要提交的数据
 	progress := false
 
 	for _, blob := range req.response {

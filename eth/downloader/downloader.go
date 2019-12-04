@@ -1579,6 +1579,7 @@ func (d *Downloader) DeliverReceipts(id string, receipts [][]*types.Receipt) (er
 }
 
 // DeliverNodeData injects a new batch of node state data received from a remote node.
+// DeliverNodeData注入从远程节点接收的新批节点状态数据。
 func (d *Downloader) DeliverNodeData(id string, data [][]byte) (err error) {
 	return d.deliver(id, d.stateCh, &statePack{id, data}, stateInMeter, stateDropMeter)
 }

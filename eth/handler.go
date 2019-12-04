@@ -398,6 +398,7 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 				} else {
 					if header := pm.blockchain.GetHeaderByNumber(next); header != nil {
 						nextHash := header.Hash()
+						// 如果query.Skip=0,那就是返回这个hash的父hash值回来
 						expOldHash, _ := pm.blockchain.GetAncestor(nextHash, next, query.Skip+1, &maxNonCanonical)
 						if expOldHash == query.Origin.Hash {
 							query.Origin.Hash, query.Origin.Number = nextHash, next
@@ -541,6 +542,8 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 			bytes int
 			data  [][]byte
 		)
+		// 允许获取的最大值
+		// 有双重限制：1.单次获取的数据量大小 2.单次获取的state数量
 		for bytes < softResponseLimit && len(data) < downloader.MaxStateFetch {
 			// Retrieve the hash of the next state entry
 			if err := msgStream.Decode(&hash); err == rlp.EOL {
@@ -549,6 +552,7 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 				return errResp(ErrDecode, "msg %v: %v", msg, err)
 			}
 			// Retrieve the requested state entry, stopping if enough was found
+			// 检索请求的状态条目，如果找到足够的则停止
 			if entry, err := pm.blockchain.TrieNode(hash); err == nil {
 				data = append(data, entry)
 				bytes += len(entry)
@@ -558,6 +562,7 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 
 	case p.version >= eth63 && msg.Code == NodeDataMsg:
 		// A batch of node state data arrived to one of our previous requests
+		// 接收到节点发来的数据
 		var data [][]byte
 		if err := msg.Decode(&data); err != nil {
 			return errResp(ErrDecode, "msg %v: %v", msg, err)

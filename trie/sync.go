@@ -91,20 +91,25 @@ func NewSync(root common.Hash, database DatabaseReader, callback LeafCallback) *
 }
 
 // AddSubTrie registers a new trie to the sync code, rooted at the designated parent.
+// AddSubTrie向同步代码注册一个新的trie，以同名代码为根。
 func (s *Sync) AddSubTrie(root common.Hash, depth int, parent common.Hash, callback LeafCallback) {
 	// Short circuit if the trie is empty or already known
 	if root == emptyRoot {
 		return
 	}
+	// 从内存缓冲区去查找，如果存在则不执行
+	// 这个缓存结构是存储已经请求过，节点发送回来的数据
 	if _, ok := s.membatch.batch[root]; ok {
 		return
 	}
+	// 这里根据根hash去db查询，如果已经存在了就直接返回
 	key := root.Bytes()
 	blob, _ := s.database.Get(key)
 	if local, err := decodeNode(key, blob, 0); local != nil && err == nil {
 		return
 	}
 	// Assemble the new sub-trie sync request
+	// 构建一个请求，如果这个请求有父级就取出来，父级深度+1，把父级追加到请求中
 	req := &request{
 		hash:     root,
 		depth:    depth,
@@ -119,6 +124,7 @@ func (s *Sync) AddSubTrie(root common.Hash, depth int, parent common.Hash, callb
 		ancestor.deps++
 		req.parents = append(req.parents, ancestor)
 	}
+	// 把这个hash存储到待请求的队列中
 	s.schedule(req)
 }
 
@@ -156,6 +162,7 @@ func (s *Sync) AddRawEntry(hash common.Hash, depth int, parent common.Hash) {
 }
 
 // Missing retrieves the known missing nodes from the trie for retrieval.
+// Missing从trie中检索已知缺失的节点以进行检索
 func (s *Sync) Missing(max int) []common.Hash {
 	requests := []common.Hash{}
 	for !s.queue.Empty() && (max == 0 || len(requests) < max) {
@@ -180,6 +187,8 @@ func (s *Sync) Process(results []SyncResult) (bool, int, error) {
 			return committed, i, ErrAlreadyProcessed
 		}
 		// If the item is a raw entry request, commit directly
+		// 如果该项是原始条目请求，则直接提交
+		// 这里是获取codeHash数据才会有
 		if request.raw {
 			request.data = item.Data
 			s.commit(request)
@@ -187,6 +196,7 @@ func (s *Sync) Process(results []SyncResult) (bool, int, error) {
 			continue
 		}
 		// Decode the node data content and update the request
+		// 解码节点数据内容并更新请求
 		node, err := decodeNode(item.Hash[:], item.Data, 0)
 		if err != nil {
 			return committed, i, err
@@ -194,10 +204,12 @@ func (s *Sync) Process(results []SyncResult) (bool, int, error) {
 		request.data = item.Data
 
 		// Create and schedule a request for all the children nodes
+		// 为所有子节点创建和计划请求
 		requests, err := s.children(request, node)
 		if err != nil {
 			return committed, i, err
 		}
+		// 这里的意思是，如果接收到的数据是valueNode，那就是实际值了，没有子node需要去请求了，就需要把这data存储起来了
 		if len(requests) == 0 && request.deps == 0 {
 			s.commit(request)
 			committed = true
@@ -275,6 +287,8 @@ func (s *Sync) children(req *request, object node) ([]*request, error) {
 		panic(fmt.Sprintf("unknown node: %+v", node))
 	}
 	// Iterate over the children, and request all unknown ones
+	// 这里就是把树的子节点遍历出来，如果是hash就再构建一个请求，如果是value节点那就调用callback
+	// callback函数是在state/sync的NewStateSync里面定义的，用来解析value节点为账户对象的
 	requests := make([]*request, 0, len(children))
 	for _, child := range children {
 		// Notify any external watcher of a new key/value node
@@ -310,6 +324,7 @@ func (s *Sync) children(req *request, object node) ([]*request, error) {
 // commit finalizes a retrieval request and stores it into the membatch. If any
 // of the referencing parent requests complete due to this commit, they are also
 // committed themselves.
+// 这个函数是暂时把数据存储在内存中，实际写db是在statesync.loop中
 func (s *Sync) commit(req *request) (err error) {
 	// Write the node content to the membatch
 	s.membatch.batch[req.hash] = req.data

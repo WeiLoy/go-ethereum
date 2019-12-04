@@ -32,10 +32,13 @@ func NewStateSync(root common.Hash, database trie.DatabaseReader) *trie.Sync {
 		if err := rlp.Decode(bytes.NewReader(leaf), &obj); err != nil {
 			return err
 		}
+		// 获取账户下的storageRoot值构建一个新的request，和codeHash
+		// 所以这里的请求是没有传callback函数的
 		syncer.AddSubTrie(obj.Root, 64, parent, nil)
 		syncer.AddRawEntry(common.BytesToHash(obj.CodeHash), 64, parent)
 		return nil
 	}
+	// 这里是新创建的时候传了区块头里的stateRoot过来的，所以传了一个callback函数进去，用来处理account数据的
 	syncer = trie.NewSync(root, database, callback)
 	return syncer
 }
